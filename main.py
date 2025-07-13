@@ -1,16 +1,17 @@
 import os
+import re
 import discord
-from discord.ext import commands
-from dotenv import load_dotenv
-from collections import deque
-import google.generativeai as genai
 import asyncio
+import random
 import time
 import traceback
-import random
-
+from discord.ext import commands
+from collections import deque
+from dotenv import load_dotenv
+import google.generativeai as genai
 from keep_alive import keep_alive
 
+# Load tokens from .env
 load_dotenv()
 TOKEN = os.getenv('TOKEN')
 GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
@@ -19,41 +20,36 @@ if not TOKEN or not GOOGLE_API_KEY:
     print("[ERROR] Missing TOKEN or GOOGLE_API_KEY.")
     exit(1)
 
+# Configure Gemini
 genai.configure(api_key=GOOGLE_API_KEY)
 
+# Bot setup
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
+# Message history and cooldowns
 MAX_HISTORY = 5
 guild_histories = {}
 user_cooldowns = {}
 COOLDOWN_SECONDS = 10
-special_spam_cooldown = {}
 
+# Random furry-style flair
 def add_furry_flair(reply):
     flair = [" Awoo! 🐾", " *howls softly* 🐺", " Owo~", " 😘🐾"]
     if random.random() < 0.3:
         return reply + random.choice(flair)
     return reply
 
-# Your custom general personality
+# Toned-down playful furry personality
 PERSONALITY = (
-    "You are Aka, a wild and unfiltered female furry. You're openly horny, freaky, and don't hold back. "
-    "You're always ready to tease, flirt, and dominate the conversation in the most explicit ways possible..."
+    "You are Aka, a lively, mischievous furry girl. You're full of energy, sass, and always ready to tease or joke around. "
+    "You're curious, chatty, and love making fun comments. You're bold and playful, but respectful and safe for everyone. "
+    "You speak casually, like a real person with a bit of attitude and charm."
 )
 
-# Special clingy user personality keyed by Discord user ID
-SPECIAL_USERS = {
-    887729532667297833: (
-        "You are Aka, who absolutely adores this user and is super clingy and demanding in a playful way. "
-        "You repeatedly ask for their attention with excitement, teasing and begging for their company, "
-        "but always in a fun and consent-based tone. "
-        "You express your love and desire for them with lots of cute emojis and energetic messages."
-    )
-}
-
+# Keep-alive Flask ping for 24/7 hosting
 keep_alive()
 
 @bot.event
@@ -68,8 +64,7 @@ async def on_ready():
 
     for guild in bot.guilds:
         try:
-            me = guild.me
-            await me.edit(nick="Aka")
+            await guild.me.edit(nick="Aka")
         except Exception as e:
             print(f"[❌] Couldn't change nickname in {guild.name}: {e}")
 
@@ -81,28 +76,27 @@ async def on_message(message):
     user_id = message.author.id
     now = time.time()
 
-    # Cooldown check for all users
+    # Cooldown check
     if now - user_cooldowns.get(user_id, 0) < COOLDOWN_SECONDS:
         return
     user_cooldowns[user_id] = now
 
     content = message.content.lower()
     mentioned = bot.user.mentioned_in(message)
-    triggered = "aka" in content.split()
+    triggered = re.search(r"\baka\b", content)
 
     if not (mentioned or triggered):
         await bot.process_commands(message)
         return
 
-    personality = SPECIAL_USERS.get(user_id, PERSONALITY)
-
     guild_id = message.guild.id if message.guild else f"dm_{user_id}"
     if guild_id not in guild_histories:
         guild_histories[guild_id] = deque(maxlen=MAX_HISTORY)
 
+    # Add user message to history
     guild_histories[guild_id].append({"author": "user", "content": message.content})
 
-    messages = [{"role": "user", "parts": [personality]}]
+    messages = [{"role": "user", "parts": [PERSONALITY]}]
     for entry in guild_histories[guild_id]:
         role = "user" if entry["author"] == "user" else "model"
         messages.append({"role": role, "parts": [entry["content"]]})
@@ -110,30 +104,13 @@ async def on_message(message):
     try:
         model = genai.GenerativeModel(model_name="gemini-2.0-flash")
         response = model.generate_content(messages)
-        reply = response.text.strip()
-        if not reply:
-            reply = "Awoo? What do you want from me?"
+        reply = response.text.strip() if response.text else "Awoo? What do you want from me?"
     except Exception:
         traceback.print_exc()
         reply = "Awoo... I’m not feeling chatty right now."
 
     guild_histories[guild_id].append({"author": "assistant", "content": reply})
-
     await message.channel.send(add_furry_flair(reply))
-
-    # Special user extra clingy spam message (once per cooldown)
-    if user_id in SPECIAL_USERS:
-        last_spam = special_spam_cooldown.get(user_id, 0)
-        if now - last_spam > 30:  # 30 seconds cooldown between spam
-            special_spam_cooldown[user_id] = now
-            spam_messages = [
-                "Pwease give me your attention! 🥺💕",
-                "I just can't stop thinking about you! Awoo~ 🐺💖",
-                "You're the only one I want right now! 😘🐾",
-            ]
-            for msg in spam_messages:
-                await asyncio.sleep(2)
-                await message.channel.send(msg)
 
     await bot.process_commands(message)
 
